@@ -1,6 +1,9 @@
 #include "wifiOTAsetup.h"
 #include <config>
 
+// #define Serial Serial0
+
+
 void wifiSetup() {
 
   while (WiFi.status() != WL_CONNECTED) {
@@ -28,7 +31,7 @@ void wifiSetup() {
       Serial.println(WiFi.localIP());  
       
       WiFi.setAutoReconnect(true);
-      WiFi.persistent(false);
+      WiFi.persistent(true);
       break;
       }
     delay(500);
