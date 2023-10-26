@@ -53,6 +53,10 @@ Turning off the hotplate is done by pressing button 2 at any point.
 
 // Task updatePID(1000, TASK_FOREVER, &t1Callback);
 
+#include "RunningAverage.h"
+
+RunningAverage last5s(10);
+
 
 
 // definitions - pin definitions and constants
@@ -64,10 +68,14 @@ Turning off the hotplate is done by pressing button 2 at any point.
 #define thermoCLK 14          // Clock pin for MAX6675
 #elif ESP32
 #define neopixelPIN 3       // The output pin for the Neopixels
-#define SSR 5                // the output pin that the SSR is connected to
-#define thermoDO 39           // Data pin for MAX6675 (thermocouple amp)
-#define thermoCS 37           // CS pin for MAX6675
-#define thermoCLK 35          // Clock pin for MAX6675
+// #define SSR 5                // the output pin that the SSR is connected to
+// #define thermoDO 39           // Data pin for MAX6675 (thermocouple amp)
+// #define thermoCS 37           // CS pin for MAX6675
+// #define thermoCLK 35          // Clock pin for MAX6675
+#define SSR 16                // the output pin that the SSR is connected to
+#define thermoDO 12           // Data pin for MAX6675 (thermocouple amp)
+#define thermoCS 11           // CS pin for MAX6675
+#define thermoCLK 9          // Clock pin for MAX6675
 #endif
 
 
@@ -81,7 +89,8 @@ unsigned long LEDinterval = 500;             // how often in milliseconds to upd
 unsigned int millis_before, millis_before_2; // used for time tracking in the loop
 unsigned int millis_now = 0;                 // used to keep track of the current time of the loop
 unsigned int refresh_rate = 1000;                     // how often to update the display in milliseconds
-unsigned int temp_refresh_rate = 100;                 // how often to check the temperature in milliseconds
+unsigned long tempTimer;                      
+unsigned int temp_refresh_rate = 500;                 // how often to check the temperature in milliseconds
 unsigned int seconds = 0;                    // used in the display to show how long the sequence has been running
 bool but_1_state = false;                    // used to track of the button has been pushed. used for debouncing the button
 unsigned long but_1_timer = 0;               // used for checking the time for debouncing the button push
@@ -94,7 +103,7 @@ int temperatureSetPoint = 0;
 int temp = 0;
 int percent = 0; // used for setting the PWM percent for cooking
 
-int pwmCycleTime = 2; // Initial PWM cycle time in seconds (e.g., 10 seconds)
+int pwmCycleTime = 1; // Initial PWM cycle time in seconds (e.g., 10 seconds)
 unsigned long previousMillis = 0;
 int dutyCycle = 0;
 
@@ -222,6 +231,15 @@ void slowPWM(int pin) {
 }
 
 
+void mosfetPwm(int pin) {
+
+ledcWrite(0, 200);
+
+
+
+
+}
+
 
 
 // This function is used by the displayTemperature
@@ -238,7 +256,7 @@ void sendColors(int red, int green, int blue)
 
 
 int displayTemperature() {
-    if (millis() - LEDtimer > LEDinterval) {
+    if (millis() - tempTimer > temp_refresh_rate) {
         int tempReading = thermocouple.readCelsius();
         temperature = tempReading;
 
@@ -253,8 +271,12 @@ int displayTemperature() {
 
         // Send temperature information via OSC
         sendMessage("/info/temperature", tempReading);
+        last5s.addValue(temperature);
+        double rateOfChange = (last5s.getAverageSubset(8, 2) - last5s.getAverageSubset(0, 2)) / 5;
+        // rateOfChange = roundf(rateOfChange);
+        sendMessageFloat("/info/temperature/rate", rateOfChange);
 
-        LEDtimer = millis();
+        tempTimer = millis();
         // return tempReading;
     }
         return temperature;
@@ -475,6 +497,11 @@ void setup()
   pinMode(SSR, OUTPUT);   // Define the OUTPUT for the Solid State Relay
   digitalWrite(SSR, HIGH); // Start with the SSR off
 
+// ledcSetup(0, 100, 8);
+// ledcAttachPin(SSR, 0);
+
+
+
   // pinMode(but_1, INPUT_PULLUP); // Setup the button input
   // pinMode(but_2, INPUT_PULLUP); // Setup the end button input
 
@@ -597,6 +624,9 @@ void loop()
     }
 
     slowPWM(SSR);
+    // mosfetPwm(SSR);
+
+
 
         switch (cookMode) {
         case 1:
