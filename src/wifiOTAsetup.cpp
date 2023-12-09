@@ -2,6 +2,7 @@
 #include <config>
 
 // #define Serial Serial0
+// #define Serial Serial1
 
 
 void wifiSetup() {
