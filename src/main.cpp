@@ -16,7 +16,7 @@ This is a rework of the rework (https://github.com/bhboyle/Intelligent_Hotplate)
 #include "wifiOTAsetup.h"
 
 Adafruit_ADS1115 ads;
-const int numChannels = 2; // Channel 1 of adc is thermistor, channel 2 is reference 3V3
+const int numChannels = 4; // Channel 1 of adc is thermistor, channel 2 is reference 3V3
 int adc[numChannels];
 float volts[numChannels];
 
@@ -34,13 +34,22 @@ unsigned int millis_now = 0;                 // used to keep track of the curren
 unsigned long previousMillis = 0;
 unsigned long tempTimer;
 
+#define EVERY_N_MILLIS(identifier, interval) \
+    static unsigned long previousMillisTimer_##identifier = 0; \
+    if (millis() - previousMillisTimer_##identifier >= interval) { \
+        previousMillisTimer_##identifier = millis();
+
+
+
 unsigned int refresh_rate = 1000; // rate of OSC messages with info
 
-double temperature = 0; // this is the variable that holds the current temperature reading
+double temperature[3];
 int period = 5;
 int temp_refresh_rate = 100; // Thermistor reading rate - currently simple nonblocking read without using interrupt
 int numSamples = 50;
-RunningAverage last5s(numSamples);
+
+RunningAverage heaterTempRA(numSamples);
+RunningAverage pcbTempRa(numSamples);
 
 // TODO: rewrite reflow profile mode
 unsigned int seconds = 0;      // used in the display to show how long the sequence has been running
@@ -82,8 +91,8 @@ String Names[] = // this is the text displayed in the display in the various sta
         "Reflow",
 };
 
-WiFiUDP Udp;
-const IPAddress outIp(192, 168, 0, 137); // TODO: set ip with a message
+WiFiUDP OscUDP;
+const IPAddress outIp(192, 168, 5, 143); // TODO: set ip with a message
 const unsigned int outPort = 10001;      // OpenStageControl port
 const unsigned int localPort = 8888;     // local receive port
 
@@ -94,9 +103,9 @@ void sendMessageString(const char *address, const char *message)
     OSCMessage msg(address);
     msg.add(message);
 
-    Udp.beginPacket(outIp, outPort);
-    msg.send(Udp);
-    Udp.endPacket();
+    OscUDP.beginPacket(outIp, outPort);
+    msg.send(OscUDP);
+    OscUDP.endPacket();
     msg.empty();
 }
 
@@ -105,9 +114,9 @@ void sendMessage(const char *address, int value)
     OSCMessage msg(address);
     msg.add(value);
 
-    Udp.beginPacket(outIp, outPort);
-    msg.send(Udp);
-    Udp.endPacket();
+    OscUDP.beginPacket(outIp, outPort);
+    msg.send(OscUDP);
+    OscUDP.endPacket();
     msg.empty();
 }
 
@@ -116,9 +125,9 @@ void sendMessageFloat(const char *address, float value)
     OSCMessage msg(address);
     msg.add(value);
 
-    Udp.beginPacket(outIp, outPort);
-    msg.send(Udp);
-    Udp.endPacket();
+    OscUDP.beginPacket(outIp, outPort);
+    msg.send(OscUDP);
+    OscUDP.endPacket();
     msg.empty();
 }
 
@@ -162,8 +171,8 @@ void normalPwm(int dutyCycle)
     ledcWrite(mosfetChannel, dutyCycleInverted);
 }
 
-double ntcResistance;
-double seriesResistor = 1971;
+double ntcResistance[3];
+double seriesResistor = 2208;
 double beta = 3950;
 double T25 = 25;
 double R25 = 100000;
@@ -180,7 +189,8 @@ double calculateTemperature(double R)
 int displayTemperature()
 {
 
-    double avgTemperature;
+    static double avgTemperature;
+    static double ntcVoltage[3];
 
     if (millis() - tempTimer > temp_refresh_rate)
     {
@@ -189,28 +199,47 @@ int displayTemperature()
         {
             adc[i] = ads.readADC_SingleEnded(i);
             volts[i] = ads.computeVolts(adc[i]);
+            Serial.println("---");
+            Serial.print(i);
+                        Serial.print("::");
 
-            double refVoltage = volts[1];
-            double ntcVoltage = volts[0];
 
-            ntcResistance = ((refVoltage * seriesResistor) / ntcVoltage) - seriesResistor;
+            Serial.println(volts[i]);
 
-            temperature = calculateTemperature(ntcResistance);
+            Serial.println("---");
         }
-        avgTemperature = (last5s.getAverageSubset(40, 10));
+        double refVoltage = volts[0];
 
-        sendMessageFloat("/info/temperature", temperature);
-        last5s.addValue(temperature);
-        double rateOfChange = (last5s.getAverageSubset(40, 10) - last5s.getAverageSubset(0, 10)) / 5;
+        for (size_t y = 0; y < 3; y++)
+        {
+            ntcVoltage[y] = volts[y + 1];
+            ntcResistance[y] = ((refVoltage * seriesResistor) / ntcVoltage[y]) - seriesResistor;
+            temperature[y] = calculateTemperature(ntcResistance[y]);
+        }
+
+        sendMessageFloat("/info/temperature/1", temperature[0]);
+        sendMessageFloat("/info/temperature/2", temperature[1]);
+        sendMessageFloat("/info/temperature/3", temperature[2]);
+
+        avgTemperature = (heaterTempRA.getAverageSubset(40, 10));
+
+        heaterTempRA.addValue(temperature[2]);
+        pcbTempRa.addValue(temperature[0]);
+
+        double rateOfHeater = (heaterTempRA.getAverageSubset(40, 10) - heaterTempRA.getAverageSubset(0, 10)) / 5;
+        double rateOfPCB = (pcbTempRa.getAverageSubset(40, 10) - pcbTempRa.getAverageSubset(0, 10)) / 5;
+
 
         sendMessageFloat("/info/avgtemperature", avgTemperature);
 
-        sendMessageFloat("/info/temperature/rate", rateOfChange);
+        sendMessageFloat("/info/temperature/heater/rate", rateOfHeater);
+        sendMessageFloat("/info/temperature/pcb/rate", rateOfPCB);
+
         sendMessageFloat("/info/time", millis());
 
         tempTimer = millis();
     }
-    return avgTemperature;
+    return temperature[0];
 }
 
 void displayMode()
@@ -282,7 +311,7 @@ void smdCook()
 
             sendMessage("/asdasd", n);
 
-            Input = temperature;
+            Input = temperature[0];
         }
 
         // This is the first heating stage handler
@@ -292,7 +321,7 @@ void smdCook()
             myPID.Compute();
             dutyCycle = Output;
 
-            if (temperature >= stage_2_set_point)
+            if (temperature[0] >= stage_2_set_point)
             {
                 heatStage++;
                 stage2Timer = seconds;
@@ -319,7 +348,7 @@ void smdCook()
             myPID.Compute();
             dutyCycle = Output;
 
-            if (temperature >= max_temp)
+            if (temperature[0] >= max_temp)
             {
                 heatStage++;
                 stage4Timer = seconds;
@@ -358,7 +387,7 @@ void smdCook()
             millis_before = millis();
             seconds++;
 
-            sendMessage("/info/temperature", temperature);
+            // sendMessage("/info/temperature", temperature[0]);
 
             // If not in any active stage, send appropriate status message
             if (heatStage == 0)
@@ -421,7 +450,7 @@ void setup()
     }
 
     wifiSetup();
-    Udp.begin(localPort);
+    OscUDP.begin(localPort);
 
     myPID.SetOutputLimits(0, 255);
 
@@ -432,6 +461,8 @@ void setup()
 
     ledcSetup(mosfetChannel, mosfetFreq, mosfetResolution);
     ledcAttachPin(mosfetPin, mosfetChannel);
+
+    otaSetup();
 
     millis_before = millis();
     millis_now = millis();
@@ -461,8 +492,11 @@ void handleSetMode(int newMode)
 
 void loop()
 {
+
+    ArduinoOTA.handle();
+
     OSCMessage rcvmsg;
-    int size = Udp.parsePacket();
+    int size = OscUDP.parsePacket();
 
     if (size > 0)
     {
@@ -470,7 +504,7 @@ void loop()
         n++;
 
         while (size--)
-            rcvmsg.fill(Udp.read());
+            rcvmsg.fill(OscUDP.read());
 
         if (!rcvmsg.hasError())
         {

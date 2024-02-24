@@ -1,12 +1,8 @@
 {
-	"folders": [
-		{
-			"path": "F:/reflow-plate"
-		},
-		{
-			"name": "reflow-plate",
-			"path": ".."
-		}
-	],
-	"settings": {}
+    "folders": [
+        {
+            "name": "zegar-trzy-siostry",
+            "path": "F:/platformio/zegar-trzy-siostry"
+        }
+    ]
 }
