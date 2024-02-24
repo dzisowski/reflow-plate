@@ -20,8 +20,8 @@ const int numChannels = 4; // Channel 1 of adc is thermistor, channel 2 is refer
 int adc[numChannels];
 float volts[numChannels];
 
-#define SSR 16
-#define MOSFET 18
+#define LEDPIN 4
+// #define
 
 double Setpoint, Input, Output; // variables needed for the PID loop
 int temperatureSetPoint = 0;
@@ -34,62 +34,11 @@ unsigned int millis_now = 0;                 // used to keep track of the curren
 unsigned long previousMillis = 0;
 unsigned long tempTimer;
 
-#define EVERY_N_MILLIS(identifier, interval) \
-    static unsigned long previousMillisTimer_##identifier = 0; \
-    if (millis() - previousMillisTimer_##identifier >= interval) { \
+#define EVERY_N_MILLIS(identifier, interval)                     \
+    static unsigned long previousMillisTimer_##identifier = 0;   \
+    if (millis() - previousMillisTimer_##identifier >= interval) \
+    {                                                            \
         previousMillisTimer_##identifier = millis();
-
-
-
-unsigned int refresh_rate = 1000; // rate of OSC messages with info
-
-double temperature[3];
-int period = 5;
-int temp_refresh_rate = 100; // Thermistor reading rate - currently simple nonblocking read without using interrupt
-int numSamples = 50;
-
-RunningAverage heaterTempRA(numSamples);
-RunningAverage pcbTempRa(numSamples);
-
-// TODO: rewrite reflow profile mode
-unsigned int seconds = 0;      // used in the display to show how long the sequence has been running
-bool but_1_state = false;      // used to track of the button has been pushed. used for debouncing the button
-unsigned long but_1_timer = 0; // used for checking the time for debouncing the button push
-int max_temp = 260;            // ****** this is the high temperature set point for SMD mode. *******
-int heatStage = 0;             // used for keeping track of where we are in the heating sequence
-int stage_2_set_point = 150;   // this is the "soak" temperature set point
-unsigned long stage2Timer = 0; // used to keeping track of when we went into stage two
-unsigned long stage4Timer = 0; // used for keeping track of when we went into stage 4
-int soakTime = 100;            // how long to soak the board for in seconds
-int reflowTime = 60;           // how long to reflow the board for in seconds
-int cookMode = 1;              // This is used to know what mode is selected
-
-int n = 0; // debug variable - received message count
-
-int temp = 0;
-int percent = 0; // power in percent mode
-
-int pwmCycleTime = 1; // Initial SLOW PWM cycle time in seconds - used for mechanical relay or ssr
-int dutyCycle = 0;    // used for both slow and normal pwm outs
-
-const int mosfetPin = MOSFET; // variables for regular pwm out
-const int mosfetFreq = 100;
-const int mosfetChannel = 0;
-const int mosfetResolution = 8;
-
-bool button1 = 0;
-bool button2 = 0;
-
-boolean cookStatus = 0; // this is used to know if we are actively cooking
-
-String Names[] = // this is the text displayed in the display in the various stages for SMD cooking mode
-    {
-        "Off",
-        "Heat",
-        "Soak",
-        "Blast",
-        "Reflow",
-};
 
 WiFiUDP OscUDP;
 const IPAddress outIp(192, 168, 5, 143); // TODO: set ip with a message
@@ -131,377 +80,29 @@ void sendMessageFloat(const char *address, float value)
     msg.empty();
 }
 
-void slowPWM(int pin)
-{
-
-    if (dutyCycle < 0)
-    {
-        dutyCycle = 0;
-    }
-    else if (dutyCycle > 255)
-    {
-        dutyCycle = 255;
-    }
-
-    unsigned long currentMillis = millis();
-    unsigned long pwmCycleTimeU = pwmCycleTime;
-
-    if (currentMillis - previousMillis <= (dutyCycle / 255.0) * (pwmCycleTime * 1000))
-    {
-        digitalWrite(pin, LOW);
-        sendMessage("/pwm", 1);
-    }
-    else
-    {
-
-        digitalWrite(pin, HIGH);
-        sendMessage("/pwm", 0);
-    }
-
-    if (currentMillis - previousMillis >= pwmCycleTimeU * 1000)
-    {
-        previousMillis = currentMillis;
-    }
-}
-
-void normalPwm(int dutyCycle)
-{
-
-    int dutyCycleInverted = 255 - dutyCycle;
-    ledcWrite(mosfetChannel, dutyCycleInverted);
-}
-
-double ntcResistance[3];
-double seriesResistor = 2208;
-double beta = 3950;
-double T25 = 25;
-double R25 = 100000;
-
-double calculateTemperature(double R)
-{
-    double temperatureKelvin = 1 / ((log(R / R25) / beta) + 1 / (T25 + 273.15));
-
-    double temperatureCelsius = temperatureKelvin - 273.15;
-
-    return temperatureCelsius;
-}
-
-int displayTemperature()
-{
-
-    static double avgTemperature;
-    static double ntcVoltage[3];
-
-    if (millis() - tempTimer > temp_refresh_rate)
-    {
-
-        for (int i = 0; i < numChannels; i++)
-        {
-            adc[i] = ads.readADC_SingleEnded(i);
-            volts[i] = ads.computeVolts(adc[i]);
-            Serial.println("---");
-            Serial.print(i);
-                        Serial.print("::");
-
-
-            Serial.println(volts[i]);
-
-            Serial.println("---");
-        }
-        double refVoltage = volts[0];
-
-        for (size_t y = 0; y < 3; y++)
-        {
-            ntcVoltage[y] = volts[y + 1];
-            ntcResistance[y] = ((refVoltage * seriesResistor) / ntcVoltage[y]) - seriesResistor;
-            temperature[y] = calculateTemperature(ntcResistance[y]);
-        }
-
-        sendMessageFloat("/info/temperature/1", temperature[0]);
-        sendMessageFloat("/info/temperature/2", temperature[1]);
-        sendMessageFloat("/info/temperature/3", temperature[2]);
-
-        avgTemperature = (heaterTempRA.getAverageSubset(40, 10));
-
-        heaterTempRA.addValue(temperature[2]);
-        pcbTempRa.addValue(temperature[0]);
-
-        double rateOfHeater = (heaterTempRA.getAverageSubset(40, 10) - heaterTempRA.getAverageSubset(0, 10)) / 5;
-        double rateOfPCB = (pcbTempRa.getAverageSubset(40, 10) - pcbTempRa.getAverageSubset(0, 10)) / 5;
-
-
-        sendMessageFloat("/info/avgtemperature", avgTemperature);
-
-        sendMessageFloat("/info/temperature/heater/rate", rateOfHeater);
-        sendMessageFloat("/info/temperature/pcb/rate", rateOfPCB);
-
-        sendMessageFloat("/info/time", millis());
-
-        tempTimer = millis();
-    }
-    return temperature[0];
-}
-
-void displayMode()
-{
-    char modeText[20];
-
-    switch (cookMode)
-    {
-    case 1:
-        strcpy(modeText, "% mode");
-        break;
-    case 2:
-        strcpy(modeText, "PID mode");
-        break;
-    case 3:
-        strcpy(modeText, "Reflow cycle");
-        break;
-    default:
-        strcpy(modeText, "FAULT");
-        break;
-    }
-
-    sendMessageString("/info/mode", modeText);
-}
-
-void intelligentCook()
-{
-
-    millis_now = millis();
-
-    if (millis_now - millis_before_2 > temp_refresh_rate)
-    {
-
-        millis_before_2 = millis_now;
-        Input = displayTemperature();
-        Setpoint = temperatureSetPoint;
-        myPID.Compute();
-        dutyCycle = Output;
-        sendMessage("/info/pidoutput", Output);
-
-        sendMessage("/info/setpoint", temperatureSetPoint);
-    }
-}
-
-void regularCook()
-{
-
-    int mapValue = map(percent, 0, 100, 0, 255);
-    dutyCycle = mapValue;
-
-    sendMessage("/info/cooking_percent", percent);
-
-    displayTemperature();
-}
-
-void smdCook()
-{
-    seconds = 0;
-    heatStage = 1;
-
-    while (button2 != 0)
-    {
-        displayTemperature();
-        yield();
-
-        if (millis() - millis_before_2 > temp_refresh_rate)
-        {
-            millis_before_2 = millis();
-
-            sendMessage("/asdasd", n);
-
-            Input = temperature[0];
-        }
-
-        // This is the first heating stage handler
-        if (heatStage == 1)
-        {
-            Setpoint = stage_2_set_point;
-            myPID.Compute();
-            dutyCycle = Output;
-
-            if (temperature[0] >= stage_2_set_point)
-            {
-                heatStage++;
-                stage2Timer = seconds;
-            }
-        }
-
-        // This is the second heating stage handler
-        if (heatStage == 2)
-        {
-            myPID.Compute();
-            dutyCycle = Output;
-
-            int stage2Temp = seconds - stage2Timer;
-            if (stage2Temp > soakTime)
-            {
-                heatStage++;
-            }
-        }
-
-        // This is the third heating stage handler
-        if (heatStage == 3)
-        {
-            Setpoint = max_temp;
-            myPID.Compute();
-            dutyCycle = Output;
-
-            if (temperature[0] >= max_temp)
-            {
-                heatStage++;
-                stage4Timer = seconds;
-            }
-        }
-
-        // This is the forth heating stage handler
-        if (heatStage == 4)
-        {
-            myPID.Compute();
-            dutyCycle = Output;
-
-            int temp = seconds - stage4Timer;
-            if (temp > reflowTime)
-            {
-                heatStage++;
-                dutyCycle = 0;
-            }
-        }
-
-        // This is the fifth and last heating stage handler
-        if (heatStage == 5)
-        {
-            // Send a message to indicate completion
-            sendMessageString("/info/status", "Complete");
-
-            // Reset timer and stage
-            seconds = 0;
-            heatStage = 0;
-            delay(5000);
-        }
-
-        // Update timer and send temperature information via OSC
-        if (millis() - millis_before > refresh_rate)
-        {
-            millis_before = millis();
-            seconds++;
-
-            // sendMessage("/info/temperature", temperature[0]);
-
-            // If not in any active stage, send appropriate status message
-            if (heatStage == 0)
-            {
-                sendMessageString("/info/status", "Not Running");
-            }
-            else if (heatStage > 0 && heatStage < 7)
-            {
-                char message[20];
-                sprintf(message, "Running - Stage %d", heatStage);
-                sendMessageString("/info/status", message);
-            }
-
-            // Call displayTemperature function to send temperature information via OSC
-            displayTemperature();
-        }
-    }
-}
-
-void setPid(int pid, float value)
-{
-
-    switch (pid)
-    {
-
-    case 1:
-        myPID.SetTunings(value, myPID.GetKi(), myPID.GetKd());
-        break;
-
-    case 2:
-
-        myPID.SetTunings(myPID.GetKp(), value, myPID.GetKd());
-
-        break;
-
-    case 3:
-
-        myPID.SetTunings(myPID.GetKp(), myPID.GetKi(), value);
-
-        break;
-    }
-    sendMessageFloat("/info/pid/p", myPID.GetKp());
-    sendMessageFloat("/info/pid/i", myPID.GetKi());
-    sendMessageFloat("/info/pid/d", myPID.GetKd());
-}
-
 void setup()
 {
     Serial.begin(115200);
 
-    Serial.print("asdasda");
-
-    if (!ads.begin())
-    {
-        Serial.println("Failed to initialize ADS.");
-        while (1)
-            ;
-        ads.setGain(GAIN_ONE);
-        // ads.setDataRate()
-    }
-
     wifiSetup();
     OscUDP.begin(localPort);
 
-    myPID.SetOutputLimits(0, 255);
-
-    myPID.SetMode(AUTOMATIC);
-
-    pinMode(SSR, OUTPUT);
-    digitalWrite(SSR, HIGH);
-
-    ledcSetup(mosfetChannel, mosfetFreq, mosfetResolution);
-    ledcAttachPin(mosfetPin, mosfetChannel);
+    pinMode(LEDPIN, OUTPUT);
+    digitalWrite(LEDPIN, HIGH);
 
     otaSetup();
-
-    millis_before = millis();
-    millis_now = millis();
-    displayTemperature();
-    displayMode();
-}
-
-void handleSetMode(int newMode)
-{
-    cookMode = newMode;
-    switch (cookMode)
-    {
-    case 1:
-        regularCook();
-        break;
-    case 2:
-        intelligentCook();
-        break;
-    // case 3:
-    //     smdCook();
-    //     break;
-    default:
-        break;
-    }
-    displayMode();
 }
 
 void loop()
 {
 
-    ArduinoOTA.handle();
+    // ArduinoOTA.handle();
 
     OSCMessage rcvmsg;
     int size = OscUDP.parsePacket();
 
     if (size > 0)
     {
-        sendMessage("/ok", n);
-        n++;
 
         while (size--)
             rcvmsg.fill(OscUDP.read());
@@ -509,50 +110,18 @@ void loop()
         if (!rcvmsg.hasError())
         {
 
-            if (rcvmsg.fullMatch("/set/mode"))
+            if (rcvmsg.fullMatch("/set/dutycycle"))
             {
-
-                int newMode = rcvmsg.getInt(0);
-                handleSetMode(newMode);
+                analogWrite(LEDPIN, rcvmsg.getInt(0));
             }
 
-            if (rcvmsg.fullMatch("/set/temp"))
+            if (rcvmsg.fullMatch("/set/freq"))
             {
-                temperatureSetPoint = rcvmsg.getInt(0);
+                analogWriteFreq(rcvmsg.getInt(0));
+
+
             }
 
-            if (rcvmsg.fullMatch("/set/percent"))
-            {
-                percent = rcvmsg.getInt(0);
-            }
-
-            if (rcvmsg.fullMatch("/button1"))
-            {
-                button1 = 1;
-            }
-
-            if (rcvmsg.fullMatch("/button2"))
-            {
-                button2 = 1;
-            }
-
-            if (rcvmsg.fullMatch("/set/pid/p"))
-            {
-                setPid(1, rcvmsg.getFloat(0));
-            }
-
-            if (rcvmsg.fullMatch("/set/pid/i"))
-            {
-                setPid(2, rcvmsg.getFloat(0));
-            }
-
-            if (rcvmsg.fullMatch("/set/pid/d"))
-            {
-                setPid(3, rcvmsg.getFloat(0));
-            }
-
-            sendMessage("/ok", n);
-            n++;
         }
 
         else
@@ -560,24 +129,5 @@ void loop()
             Serial.print("error: ");
             sendMessageString("/ok", "not ok");
         }
-    }
-
-    slowPWM(SSR);
-    normalPwm(dutyCycle);
-
-    switch (cookMode)
-    {
-    case 1:
-        regularCook();
-        break;
-    case 2:
-        intelligentCook();
-        break;
-    // case 3:
-    //     strcpy(modeText, "SMD Mode");
-    //     break;
-    default:
-        dutyCycle = 0;
-        break;
     }
 }
